@@ -1,0 +1,13 @@
+# config.yaml
+system:
+  max_image_size: 1920
+  log_level: "INFO"      # 可選 DEBUG, INFO, WARNING, ERROR
+  output_dir: "outputs"  # result_json 的預設輸出資料夾
+
+vision_b:
+  trufor_threshold: 0.5  # B組：鑑偽門檻
+  yolo_conf: 0.25        # B組：YOLO 置信度門檻
+
+content_c:
+  gemini_model: "gemini-1.5-flash" # C組：使用的模型版本
+  ocr_lang: "ch"         # C組：OCR 預設語言
