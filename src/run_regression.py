@@ -61,11 +61,17 @@ def run_regression(test_dir="mini", report_path="report.csv"):
                 gate_block_count += 1
                 note = f"畫質攔截: {gate_result['reasons']}"
             else:
-                # 3. 進入 AI 分流
-                route_and_execute(img_array, config)
+                # 3. 進入 AI 分流 (⚠️ 修改點：把 route_and_execute 的結果用 ai_results 變數存起來)
+                ai_results = route_and_execute(img_array, config)
+                
+                # ⚠️ 修改點：從 JSON 結果中挖出 SCRFD 的人臉數量
+                face_count = ai_results.get("vision", {}).get("scrfd_face_count", "無")
+                
                 status = "SUCCESS"
                 success_count += 1
-                note = "產線執行成功"
+                
+                # ⚠️ 修改點：把人臉數量寫進系統備註裡
+                note = f"產線執行成功 (偵測到 {face_count} 張人臉)"
 
         except Exception as e:
             status = "ERROR"
