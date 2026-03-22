@@ -14,7 +14,7 @@ def check_image_quality(img_array: np.ndarray, config: dict = None) -> dict:
     thresholds = config.get("quality_gate", {
         "min_width": 150,
         "min_height": 150,
-        "min_blur_score": 350.0, # Laplacian 變異數 (越低越模糊)
+        "min_blur_score": 80, # Laplacian 變異數 (越低越模糊)
         "min_brightness": 30.0,  # 灰階平均值 (越低越暗)
         "max_brightness": 240.0  # 灰階平均值 (越高越曝)
     })
