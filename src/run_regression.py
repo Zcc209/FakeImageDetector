@@ -22,7 +22,7 @@ import modules.b_scrfd
 import modules.c_ocr
 # import modules.b_trufor  # 有接上就可以打開
 
-def run_regression(test_dir="mini_dataset", report_path="report.csv"):
+def run_regression(test_dir="mini", report_path="report.csv"):
     print(f"\n🔍 尋找測試圖庫：{test_dir} ...")
     image_paths = glob.glob(os.path.join(test_dir, "*.*"))
     
@@ -106,4 +106,4 @@ def run_regression(test_dir="mini_dataset", report_path="report.csv"):
 
 if __name__ == "__main__":
     # 你可以依據 Colab 真實路徑修改這裡
-    run_regression(test_dir="mini_dataset", report_path="report.csv")   
+    run_regression(test_dir="mini", report_path="report.csv")   
