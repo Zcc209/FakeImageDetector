@@ -84,7 +84,7 @@ def run_regression(test_dir="mini", report_path="report.csv"):
             
             # 在終端機印出進度
             if status == "SUCCESS":
-                print(f"  ✅ [{status}] {img_name} - 耗時: {elapsed_time:.3f}s")
+                print(f"  ✅ [{status}] {img_name} - 耗時: {elapsed_time:.3f}s ({note})")
             elif status == "REJECTED":
                 print(f"  🛡️ [{status}] {img_name} - 耗時: {elapsed_time:.3f}s ({note})")
             else:
