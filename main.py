@@ -5,6 +5,7 @@ import yaml
 import json
 import logging
 from datetime import datetime
+from urllib.parse import urlparse # 用來判斷是不是 URL
 
 # 將 src 加入路徑
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
@@ -12,8 +13,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 # 在 main.py 頂部加入這些 import (這會觸發裝飾器，完成註冊)
 from core.registry import list_modules
 from core.router import route_and_execute
-from core.image_io import load_image
+from core.image_io import load_image, load_image_from_bytes # 確保你有這個從 bytes 讀取的函式
 from core.preprocess import preprocess_image
+
+# ======== W7 & W8 新增的 Import ========
+from core.fetcher import fetch_image_from_url
+from core.errors import AppError, ErrorCode, build_error_response
+# =======================================
 
 import modules.b_yolo
 import modules.b_scrfd
@@ -41,38 +47,15 @@ def setup_logger(log_level_str):
     return logging.getLogger(__name__)
 
 # ==========================================
-# 2. B 組與 C 組的替身模組 (Stubs)
-# 作用：先寫死假資料，證明資料流(Pipeline)是通的
-# ==========================================
-def run_vision_stub(img_array, config_b) -> dict:
-    """B 組視覺/鑑偽模組的入口 (Stub)"""
-    logging.info("執行 B 組視覺模組推論 (Stub)...")
-    return {
-        "trufor_score": 0.85,
-        "is_tampered": 0.85 > config_b.get("trufor_threshold", 0.5),
-        "yolo_objects": [{"label": "person", "confidence": 0.9}],
-        "scrfd_face_count": 1
-    }
-
-def run_content_stub(img_array, config_c) -> dict:
-    """C 組內容/LLM模組的入口 (Stub)"""
-    logging.info(f"執行 C 組內容模組推論 (Stub, 模型: {config_c.get('gemini_model')})...")
-    return {
-        "ocr_text": "測試假文字：急售遊戲帳號加Line",
-        "dire_score": 0.1,
-        "is_ai_generated": False,
-        "gemini_summary": "這是系統自動產生的假摘要，測試系統流程用。",
-        "risk_tags": ["測試標籤"]
-    }
-
-# ==========================================
-# 3. 主程式流程 (Router & Pipeline)
+# 2. 主程式流程 (Router & Pipeline)
 # ==========================================
 def main():
     # A. CLI 參數解析
     parser = argparse.ArgumentParser(description="專題假圖偵測系統 v1")
     parser.add_argument("source", type=str, help="圖片的本地路徑或 URL")
     parser.add_argument("--config", type=str, default="config.yaml", help="設定檔路徑")
+    # 新增一個開關，控制是否允許從網址抓圖 (配合 A8 需求)
+    parser.add_argument("--disable-fetcher", action="store_true", help="停用從 URL 抓取圖片的功能")
     args = parser.parse_args()
 
     # B. 讀取設定檔
@@ -90,37 +73,73 @@ def main():
         os.makedirs(output_dir)
 
     # D. 核心 Pipeline 開始
+    # 先準備好預設的成功 JSON 結構
     result = {
         "status": "success",
-        "error_code": None,
-        "metadata": {"source": args.source},
+        "error_code": 0,
+        "error_name": "SUCCESS",
+        "message": "OK",
+        "metadata": {"source": args.source, "is_url": False},
         "vision": {},
         "content": {}
     }
 
     try:
-        logger.info("Step 1: 載入並前處理圖片...")
-        raw_img = load_image(args.source)
+        logger.info("Step 1: 取得圖片...")
+        
+        # 簡單判斷 source 是否為 URL (http:// 或 https://)
+        is_url = urlparse(args.source).scheme in ['http', 'https']
+        result["metadata"]["is_url"] = is_url
+        
+        raw_img = None
+        
+        if is_url:
+            if args.disable_fetcher:
+                raise AppError(ErrorCode.INVALID_INPUT, "系統目前停用從 URL 抓取圖片的功能")
+                
+            logger.info(f"偵測到 URL 輸入，啟動 Fetcher 模組進行安全下載...")
+            image_bytes = fetch_image_from_url(args.source)
+            logger.info("下載完成，轉換為陣列格式...")
+            # 這裡假設你的 image_io 裡有 load_image_from_bytes，
+            # 如果沒有，你可能要把 bytes 存成暫存檔再用 load_image 讀取，或者擴充 image_io.py
+            raw_img = load_image_from_bytes(image_bytes)
+        else:
+            logger.info(f"偵測到本地路徑，直接讀取...")
+            raw_img = load_image(args.source)
+
+        logger.info("Step 2: 圖片前處理...")
         img_array = preprocess_image(raw_img, max_size=config["system"]["max_image_size"])
         result["metadata"]["processed_shape"] = list(img_array.shape)
         
         # 確認註冊表狀態
         logger.info(f"已掛載的模組: {list_modules()}")
 
-        logger.info("Step 2 & 3: 進入 Router 動態分流與模組推論...")
+        logger.info("Step 3: 進入 Router 動態分流與模組推論...")
         # 將 numpy array 與設定檔丟給 router，它會把所有 JSON 組合好還給你
         router_results = route_and_execute(img_array, config)
         
         # 把 router 整理好的結果塞進最終的 JSON
-        result["vision"] = router_results["vision"]
-        result["content"] = router_results["content"]
+        result["vision"] = router_results.get("vision", {})
+        result["content"] = router_results.get("content", {})
 
         logger.info("所有模組執行完畢！")
 
+    # ====== 使用 W7 的標準錯誤處理 ======
+    except AppError as e:
+        logger.error(f"系統執行發生已知錯誤 [{e.code.name}]: {e.message}")
+        # 使用我們定義好的格式覆蓋 result
+        result = build_error_response(e.code, e.message)
+        result["metadata"] = {"source": args.source} # 保留來源資訊
+
     except Exception as e:
-        logger.error(f"系統執行失敗: {e}")
-        result["status"] = "error"
-        result["error_code"] = str(e)
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"系統發生未預期崩潰:\n{error_trace}")
+        # 捕捉未知錯誤
+        result = build_error_response(ErrorCode.UNKNOWN_ERROR, f"未預期錯誤: {str(e)}")
+        result["metadata"] = {"source": args.source}
+
+    # ====================================
 
     # E. 輸出 result.json
     # 決定輸出檔名 (用時間戳避免覆蓋)
