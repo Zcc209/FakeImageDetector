@@ -1,5 +1,8 @@
 import os
 import requests
+import cv2
+import numpy as np
+from .errors import AppError, ErrorCode
 from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 
@@ -44,3 +47,26 @@ def _load_local_image(path: str) -> Image.Image:
         raise ImageLoadError(f"無法辨識的圖片格式: {path}")
     except Exception as e:
         raise ImageLoadError(f"未期的錯誤: {e}")
+
+def load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
+    """
+    將網路抓下來的二進位圖片資料 (bytes) 轉換為 numpy array。
+    預設轉換為 OpenCV 標準的 BGR 格式。
+    """
+    try:
+        # 1. 將 bytes 轉成一維 numpy array
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        
+        # 2. 解碼成 OpenCV 圖片矩陣 (如果解碼失敗會回傳 None)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            # 觸發我們 W7 寫好的統一錯誤處理
+            raise AppError(ErrorCode.INVALID_INPUT, "無法解碼圖片資料，檔案可能已損毀或格式不支援")
+            
+        return img
+        
+    except AppError:
+        raise
+    except Exception as e:
+        raise AppError(ErrorCode.INVALID_INPUT, f"讀取圖片 bytes 發生未預期錯誤: {str(e)}")
