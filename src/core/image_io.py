@@ -2,6 +2,7 @@ import os
 import requests
 import cv2
 import numpy as np
+import io
 from .errors import AppError, ErrorCode
 from io import BytesIO
 from PIL import Image, UnidentifiedImageError
