@@ -48,25 +48,23 @@ def _load_local_image(path: str) -> Image.Image:
     except Exception as e:
         raise ImageLoadError(f"未期的錯誤: {e}")
 
-def load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
+def load_image_from_bytes(image_bytes: bytes):
     """
-    將網路抓下來的二進位圖片資料 (bytes) 轉換為 numpy array。
-    預設轉換為 OpenCV 標準的 BGR 格式。
+    從 bytes 讀取圖片並轉為 PIL Image 物件，
+    以配合 preprocess_image 中的 EXIF 旋轉處理。
     """
     try:
-        # 1. 將 bytes 轉成一維 numpy array
-        nparr = np.frombuffer(image_bytes, np.uint8)
+        # 使用 io.BytesIO 將 bytes 轉換為檔案流，再交給 PIL 讀取
+        img = Image.open(io.BytesIO(image_bytes))
         
-        # 2. 解碼成 OpenCV 圖片矩陣 (如果解碼失敗會回傳 None)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        # 呼叫 load() 強制載入圖片資料，若圖片破檔會在這裡直接噴錯攔截
+        img.load() 
         
-        if img is None:
-            # 觸發我們 W7 寫好的統一錯誤處理
-            raise AppError(ErrorCode.INVALID_INPUT, "無法解碼圖片資料，檔案可能已損毀或格式不支援")
+        # 統一轉換為 RGB 模式 (避免 RGBA 或是黑白圖片造成後續維度錯誤)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
             
         return img
         
-    except AppError:
-        raise
     except Exception as e:
-        raise AppError(ErrorCode.INVALID_INPUT, f"讀取圖片 bytes 發生未預期錯誤: {str(e)}")
+        raise AppError(ErrorCode.INVALID_INPUT, f"無法解析圖片資料，檔案可能已損毀或格式不支援: {str(e)}")
