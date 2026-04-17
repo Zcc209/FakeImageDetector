@@ -18,7 +18,7 @@ def main():
     # 1. 收集所有【本機圖片路徑】
     sources = []
     if os.path.exists(input_dir):
-        for filename in os.listdir(input_dir):
+        for filename in sorted(os.listdir(input_dir)):
             if not filename.startswith("."): # 排除隱藏檔
                 sources.append(os.path.join(input_dir, filename))
     else:
