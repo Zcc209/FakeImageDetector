@@ -1,65 +1,167 @@
-# src/core/quality_gate.py
+﻿# src/core/quality_gate.py
 import cv2
 import numpy as np
 
+_DEFAULT_THRESHOLDS = {
+    "min_width": 150,
+    "min_height": 150,
+    "min_blur_score": 80.0,
+    "min_brightness": 30.0,
+    "max_brightness": 240.0,
+    # JPEG block artifact heuristic: boundary mean / non-boundary mean.
+    # Larger value means stronger block edges, often from heavy compression.
+    "max_blockiness_ratio": 1.8,
+    "enable_compression_check": True,
+}
+
+
+def _compute_blockiness(gray: np.ndarray, block_size: int = 8) -> dict:
+    """
+    Estimate JPEG-like block artifacts.
+    Compare pixel differences on 8x8 boundaries vs non-boundary positions.
+    """
+    gray_f = gray.astype(np.float32)
+    h, w = gray_f.shape[:2]
+
+    if h < block_size * 2 or w < block_size * 2:
+        return {
+            "block_boundary_diff_mean": 0.0,
+            "block_non_boundary_diff_mean": 0.0,
+            "blockiness_ratio": 0.0,
+        }
+
+    diff_x = np.abs(gray_f[:, 1:] - gray_f[:, :-1])  # shape: h, w-1
+    diff_y = np.abs(gray_f[1:, :] - gray_f[:-1, :])  # shape: h-1, w
+
+    x_idx = np.arange(diff_x.shape[1]) + 1
+    y_idx = np.arange(diff_y.shape[0]) + 1
+
+    x_boundary_mask = (x_idx % block_size) == 0
+    y_boundary_mask = (y_idx % block_size) == 0
+
+    boundary_diffs = np.concatenate(
+        [diff_x[:, x_boundary_mask].ravel(), diff_y[y_boundary_mask, :].ravel()]
+    )
+    non_boundary_diffs = np.concatenate(
+        [diff_x[:, ~x_boundary_mask].ravel(), diff_y[~y_boundary_mask, :].ravel()]
+    )
+
+    boundary_mean = float(boundary_diffs.mean()) if boundary_diffs.size else 0.0
+    non_boundary_mean = float(non_boundary_diffs.mean()) if non_boundary_diffs.size else 0.0
+    ratio = boundary_mean / (non_boundary_mean + 1e-6)
+
+    return {
+        "block_boundary_diff_mean": round(boundary_mean, 3),
+        "block_non_boundary_diff_mean": round(non_boundary_mean, 3),
+        "blockiness_ratio": round(float(ratio), 3),
+    }
+
+
+def _add_reason(reasons: list, reason_details: list, code: str, message: str, value, threshold):
+    reasons.append(code)
+    reason_details.append(
+        {
+            "code": code,
+            "message": message,
+            "value": value,
+            "threshold": threshold,
+        }
+    )
+
+
 def check_image_quality(img_array: np.ndarray, config: dict = None) -> dict:
     """
-    畫質 Gate v1：檢測模糊、低光、解析度過低。
-    攔截無效圖片，節省後續 AI 模型的算力。
+    Quality Gate v1:
+    - low_resolution
+    - too_blurry
+    - too_dark / too_bright
+    - too_compressed (JPEG blockiness heuristic)
     """
     if config is None:
         config = {}
-        
-    # 讀取門檻值設定，若無則使用預設值
-    thresholds = config.get("quality_gate", {
-        "min_width": 150,
-        "min_height": 150,
-        "min_blur_score": 80, # Laplacian 變異數 (越低越模糊)
-        "min_brightness": 30.0,  # 灰階平均值 (越低越暗)
-        "max_brightness": 240.0  # 灰階平均值 (越高越曝)
-    })
+
+    thresholds = dict(_DEFAULT_THRESHOLDS)
+    thresholds.update(config.get("quality_gate", {}))
 
     h, w = img_array.shape[:2]
-    
-    # 將 RGB 轉為灰階影像以計算 CV 指標
+
     if len(img_array.shape) == 3:
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     else:
         gray = img_array
 
     reasons = []
+    reason_details = []
     metrics = {}
 
-    # 1. 解析度過低 (Low Resolution)
+    # 1) Resolution
     metrics["resolution"] = [w, h]
     if w < thresholds["min_width"] or h < thresholds["min_height"]:
-        reasons.append("low_resolution")
+        _add_reason(
+            reasons,
+            reason_details,
+            "low_resolution",
+            "Image resolution is below minimum requirement.",
+            {"width": w, "height": h},
+            {"min_width": thresholds["min_width"], "min_height": thresholds["min_height"]},
+        )
 
-    # 2. 模糊檢測 (Blur Detection)
-    # 使用拉普拉斯算子 (Laplacian) 計算變異數。邊緣越豐富數值越高，越模糊數值越趨近 0。
-    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+    # 2) Blur (Laplacian variance)
+    blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     metrics["blur_score"] = round(blur_score, 2)
     if blur_score < thresholds["min_blur_score"]:
-        reasons.append("too_blurry")
+        _add_reason(
+            reasons,
+            reason_details,
+            "too_blurry",
+            "Image is too blurry for reliable inference.",
+            round(blur_score, 2),
+            {"min_blur_score": thresholds["min_blur_score"]},
+        )
 
-    # 3. 亮度檢測 (Light / Exposure)
-    # 計算整張圖片的平均灰階值 (0=全黑, 255=全白)
-    brightness = np.mean(gray)
+    # 3) Brightness
+    brightness = float(np.mean(gray))
     metrics["brightness"] = round(brightness, 2)
     if brightness < thresholds["min_brightness"]:
-        reasons.append("too_dark")
+        _add_reason(
+            reasons,
+            reason_details,
+            "too_dark",
+            "Image is too dark.",
+            round(brightness, 2),
+            {"min_brightness": thresholds["min_brightness"]},
+        )
     elif brightness > thresholds["max_brightness"]:
-        reasons.append("too_bright")
+        _add_reason(
+            reasons,
+            reason_details,
+            "too_bright",
+            "Image is too bright / overexposed.",
+            round(brightness, 2),
+            {"max_brightness": thresholds["max_brightness"]},
+        )
 
-    # (備註) 壓縮嚴重 (Heavy Compression)
-    # 傳統 CV 抓壓縮失真較耗時，V1 實務上解析度與模糊度檢查已能擋下 90% 的嚴重壓縮圖。
-    # 留待後續依據實測需要再加入 JPEG 區塊雜訊 (Blockiness) 檢測。
+    # 4) Heavy compression (blockiness heuristic)
+    blockiness_metrics = _compute_blockiness(gray)
+    metrics.update(blockiness_metrics)
+    if thresholds.get("enable_compression_check", True):
+        blockiness_ratio = blockiness_metrics["blockiness_ratio"]
+        if blockiness_ratio > thresholds["max_blockiness_ratio"]:
+            _add_reason(
+                reasons,
+                reason_details,
+                "too_compressed",
+                "Strong JPEG block artifacts detected.",
+                blockiness_ratio,
+                {"max_blockiness_ratio": thresholds["max_blockiness_ratio"]},
+            )
 
-    # 綜合判斷：如果 reasons 是空的，代表圖夠清晰，放行！
     is_valid = len(reasons) == 0
 
     return {
         "is_valid": is_valid,
         "reasons": reasons,
-        "metrics": metrics
+        "reason_details": reason_details,
+        "metrics": metrics,
+        "applied_thresholds": thresholds,
     }
