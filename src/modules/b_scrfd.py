@@ -45,7 +45,17 @@ def run_scrfd(img_array: np.ndarray, config: dict) -> dict:
     # 3. 執行推論 (呼叫 B 同學的 app.get 邏輯)
     faces = _app.get(img_bgr)
     
-    # 4. 回傳符合 M1 介面契約的字典
+    # 4. 整理臉框
+    scrfd_faces = []
+    for f in faces:
+        x1, y1, x2, y2 = map(int, f.bbox.tolist())
+        score = float(getattr(f, "det_score", 0.0))
+        scrfd_faces.append({
+            "box": [x1, y1, x2, y2],
+            "score": round(score, 4)
+        })
+
     return {
-        "scrfd_face_count": len(faces)
+        "scrfd_face_count": len(scrfd_faces),
+        "scrfd_faces": scrfd_faces
     }
